@@ -1,0 +1,37 @@
+[package]
+name = "crawler"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Runtime assíncrono
+tokio = { version = "1", features = ["full"] }
+
+# Cliente HTTP
+reqwest = { version = "0.11", features = ["rustls-tls", "gzip", "brotli", "deflate", "stream"] }
+futures-util = "0.3"
+bytes = "1.5"
+
+# Parsing HTML
+scraper = "0.18"
+whatlang = "0.16"
+kuchiki = "0.8"
+
+# Manipulação de URL
+url = "2.5"
+
+# Banco de Dados
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
+chrono = "0.4" # Para timestamps
+
+# Tratamento de erros
+anyhow = "1.0"
+
+# CLI / Config
+clap = { version = "4.5", features = ["derive", "env"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Observabilidade
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "ansi", "env-filter"] }
