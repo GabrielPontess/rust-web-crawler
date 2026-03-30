@@ -25,6 +25,8 @@ const DEFAULT_RETRY_MAX_ATTEMPTS: u32 = 3;
 const DEFAULT_RETRY_BACKOFF_SECS: u64 = 5;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 2_000_000;
 const DEFAULT_CONTENT_TYPES: [&str; 2] = ["text/html", "application/xhtml+xml"];
+const DEFAULT_MAX_CONCURRENCY: usize = 4;
+const DEFAULT_HOST_PARALLELISM: usize = 1;
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -39,6 +41,8 @@ pub struct AppConfig {
     pub host_delay: Duration,
     pub max_response_bytes: usize,
     pub allowed_content_types: Vec<String>,
+    pub max_concurrency: usize,
+    pub max_host_parallelism: usize,
 }
 
 impl AppConfig {
@@ -99,6 +103,8 @@ impl AppConfig {
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
+            max_concurrency: DEFAULT_MAX_CONCURRENCY,
+            max_host_parallelism: DEFAULT_HOST_PARALLELISM,
         }
     }
 }
@@ -158,6 +164,15 @@ impl TryFrom<FileConfig> for AppConfig {
             .map(|t| t.to_ascii_lowercase())
             .collect::<Vec<_>>();
 
+        let max_concurrency = raw
+            .max_concurrency
+            .unwrap_or(DEFAULT_MAX_CONCURRENCY)
+            .max(1);
+        let max_host_parallelism = raw
+            .max_host_parallelism
+            .unwrap_or(DEFAULT_HOST_PARALLELISM)
+            .max(1);
+
         Ok(Self {
             database_url,
             seed_urls,
@@ -170,6 +185,8 @@ impl TryFrom<FileConfig> for AppConfig {
             host_delay,
             max_response_bytes,
             allowed_content_types,
+            max_concurrency,
+            max_host_parallelism,
         })
     }
 }
@@ -234,6 +251,13 @@ mod tests {
         );
         assert_eq!(cfg.max_response_bytes, 100);
     }
+
+    #[test]
+    fn applies_concurrency_defaults() {
+        let cfg = from_json("{}").unwrap();
+        assert_eq!(cfg.max_concurrency, DEFAULT_MAX_CONCURRENCY);
+        assert_eq!(cfg.max_host_parallelism, DEFAULT_HOST_PARALLELISM);
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,4 +284,8 @@ struct FileConfig {
     max_response_bytes: Option<u64>,
     #[serde(default)]
     allowed_content_types: Option<Vec<String>>,
+    #[serde(default)]
+    max_concurrency: Option<usize>,
+    #[serde(default)]
+    max_host_parallelism: Option<usize>,
 }

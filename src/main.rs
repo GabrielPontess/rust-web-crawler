@@ -6,14 +6,16 @@ mod models;
 mod parser;
 mod scheduler;
 
+use std::sync::Arc;
+
 use anyhow::Result;
-use clap::Parser as ClapParser;
+use clap::Parser;
 
 use crate::config::{AppConfig, CliArgs};
 use crate::db::Database;
 use crate::fetcher::Fetcher;
 use crate::models::SearchResult;
-use crate::parser::Parser;
+use crate::parser::Parser as HtmlParser;
 use crate::scheduler::Crawler;
 
 #[tokio::main]
@@ -22,7 +24,7 @@ async fn main() -> Result<()> {
     let cli = CliArgs::parse();
     tracing::info!("Starting crawler CLI");
 
-    let config = AppConfig::from_args(&cli)?;
+    let config = Arc::new(AppConfig::from_args(&cli)?);
     tracing::info!(?config, "Configuration loaded");
 
     let db = Database::connect(&config.database_url).await?;
@@ -35,8 +37,8 @@ async fn main() -> Result<()> {
         .await?;
     tracing::info!(seeds = config.seed_urls.len(), "Queue seeded");
 
-    let fetcher = Fetcher::from_config(&config)?;
-    let parser = Parser::new();
+    let fetcher = Arc::new(Fetcher::from_config(&config)?);
+    let parser = HtmlParser::new();
 
     let crawler = Crawler::new(config, db, fetcher, parser);
     crawler.run().await

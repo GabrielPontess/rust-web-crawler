@@ -10,6 +10,7 @@ use url::Url;
 
 use crate::models::{PageRecord, SearchResult};
 
+#[derive(Clone)]
 pub struct Database {
     pool: Pool<Sqlite>,
 }
