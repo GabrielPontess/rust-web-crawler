@@ -11,6 +11,7 @@ use url::Url;
 
 use crate::config::AppConfig;
 use crate::db::Database;
+use crate::events::{CrawlEvent, EventBus};
 use crate::fetcher::Fetcher;
 use crate::parser::Parser;
 
@@ -19,6 +20,7 @@ pub struct Crawler {
     db: Database,
     fetcher: Arc<Fetcher>,
     parser: Parser,
+    events: Option<EventBus>,
 }
 
 impl Crawler {
@@ -27,43 +29,46 @@ impl Crawler {
         db: Database,
         fetcher: Arc<Fetcher>,
         parser: Parser,
+        events: Option<EventBus>,
     ) -> Self {
         Self {
             config,
             db,
             fetcher,
             parser,
+            events,
         }
     }
 
     pub async fn run(&self) -> Result<()> {
         info!("Crawler event loop started");
         let start = Instant::now();
-        let concurrency = self.config.max_concurrency.max(1);
-        let global_semaphore = Arc::new(Semaphore::new(concurrency));
+        let global_limit = self.config.max_concurrency.max(1);
+        let global_sem = Arc::new(Semaphore::new(global_limit));
         let host_limiter = Arc::new(HostLimiter::new(self.config.max_host_parallelism));
         let metrics = Arc::new(CrawlMetrics::default());
-        let mut join_set = JoinSet::new();
+        let mut tasks = JoinSet::new();
 
         loop {
-            let permit = global_semaphore.clone().acquire_owned().await?;
-
+            let permit = global_sem.clone().acquire_owned().await?;
             match self.db.next_ready().await? {
                 Some(url_str) => {
                     self.db.mark_processing(&url_str).await?;
-                    let worker_db = self.db.clone();
+                    let db = self.db.clone();
                     let fetcher = self.fetcher.clone();
                     let parser = self.parser;
                     let config = self.config.clone();
+                    let events = self.events.clone();
                     let host_limiter = host_limiter.clone();
                     let metrics = metrics.clone();
 
-                    join_set.spawn(async move {
+                    tasks.spawn(async move {
                         if let Err(err) = Self::process_url(
-                            worker_db,
+                            db,
                             fetcher,
                             parser,
                             config,
+                            events,
                             host_limiter,
                             metrics,
                             url_str,
@@ -77,15 +82,15 @@ impl Crawler {
                         Ok(())
                     });
 
-                    if join_set.len() >= concurrency {
-                        if let Some(result) = join_set.join_next().await {
+                    if tasks.len() >= global_limit {
+                        if let Some(result) = tasks.join_next().await {
                             result??;
                         }
                     }
                 }
                 None => {
                     drop(permit);
-                    if let Some(result) = join_set.join_next().await {
+                    if let Some(result) = tasks.join_next().await {
                         result??;
                     } else {
                         break;
@@ -94,7 +99,7 @@ impl Crawler {
             }
         }
 
-        while let Some(result) = join_set.join_next().await {
+        while let Some(result) = tasks.join_next().await {
             result??;
         }
 
@@ -115,42 +120,65 @@ impl Crawler {
         fetcher: Arc<Fetcher>,
         parser: Parser,
         config: Arc<AppConfig>,
+        events: Option<EventBus>,
         host_limiter: Arc<HostLimiter>,
         metrics: Arc<CrawlMetrics>,
         url_str: String,
         _permit: OwnedSemaphorePermit,
     ) -> Result<()> {
         let url = Url::parse(&url_str).context("invalid url stored in queue")?;
-        let host_key = host_with_port(&url);
-        let _host_permit = if let Some(host) = host_key.as_deref() {
-            Some(host_limiter.acquire(host).await?)
+        let host = host_with_port(&url);
+        let _host_permit = if let Some(ref host_key) = host {
+            Some(host_limiter.acquire(host_key).await?)
         } else {
             None
         };
 
+        let start = Instant::now();
         metrics.inc_started();
+        let started_event = CrawlEvent::started(&url_str, host.clone());
+        emit_event(&events, started_event.clone());
+        let _ = db.log_event(&started_event).await;
 
         match fetcher.fetch(&url).await {
             Ok(html) => match parser.parse(&url, &html) {
                 Ok(page_record) => {
                     if let Err(err) = db.store_page(&page_record, config.default_priority).await {
                         metrics.inc_failed();
-                        Self::handle_failure(&db, &config, &url_str, err.to_string()).await?;
+                        let message = err.to_string();
+                        let fail_event =
+                            CrawlEvent::failed(&url_str, host.clone(), message.clone());
+                        emit_event(&events, fail_event.clone());
+                        let _ = db.log_event(&fail_event).await;
+                        Self::handle_failure(&db, &config, &url_str, message, &events).await?;
                     } else {
                         metrics.inc_succeeded();
+                        let duration_ms = start.elapsed().as_millis() as u64;
+                        let success_event =
+                            CrawlEvent::succeeded(&url_str, host.clone(), duration_ms);
+                        emit_event(&events, success_event.clone());
+                        let _ = db.log_event(&success_event).await;
                         info!(url = %page_record.url, "Page stored successfully");
                     }
                 }
                 Err(err) => {
                     metrics.inc_failed();
-                    warn!(url = %url_str, error = %err, "Parsing failed");
-                    Self::handle_failure(&db, &config, &url_str, err.to_string()).await?;
+                    let message = err.to_string();
+                    let fail_event = CrawlEvent::failed(&url_str, host.clone(), message.clone());
+                    emit_event(&events, fail_event.clone());
+                    let _ = db.log_event(&fail_event).await;
+                    warn!(url = %url_str, error = %message, "Parsing failed");
+                    Self::handle_failure(&db, &config, &url_str, message, &events).await?;
                 }
             },
             Err(err) => {
                 metrics.inc_failed();
-                warn!(url = %url_str, error = %err, "Fetching failed");
-                Self::handle_failure(&db, &config, &url_str, err.to_string()).await?;
+                let message = err.to_string();
+                let fail_event = CrawlEvent::failed(&url_str, host.clone(), message.clone());
+                emit_event(&events, fail_event.clone());
+                let _ = db.log_event(&fail_event).await;
+                warn!(url = %url_str, error = %message, "Fetching failed");
+                Self::handle_failure(&db, &config, &url_str, message, &events).await?;
             }
         }
 
@@ -162,8 +190,9 @@ impl Crawler {
         config: &AppConfig,
         url: &str,
         error: String,
+        events: &Option<EventBus>,
     ) -> Result<()> {
-        if !db
+        if let Some(attempts) = db
             .schedule_retry(
                 url,
                 config.retry_max_attempts,
@@ -172,9 +201,19 @@ impl Crawler {
             )
             .await?
         {
+            let retry_event = CrawlEvent::retrying(url, None, attempts, error.clone());
+            emit_event(events, retry_event.clone());
+            let _ = db.log_event(&retry_event).await;
+        } else {
             warn!(%url, "URL reached retry limit; marked as failed");
         }
         Ok(())
+    }
+}
+
+fn emit_event(bus: &Option<EventBus>, event: CrawlEvent) {
+    if let Some(bus) = bus {
+        bus.emit(event);
     }
 }
 

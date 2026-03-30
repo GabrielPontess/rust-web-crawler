@@ -8,7 +8,8 @@ use sqlx::{Executor, Pool, Row, Sqlite, Transaction};
 use tracing::{debug, info, warn};
 use url::Url;
 
-use crate::models::{PageRecord, SearchResult};
+use crate::events::{CrawlEvent, CrawlEventKind};
+use crate::models::{EventLog, PageRecord, PageSummary, QueueItem, SearchResult};
 
 #[derive(Clone)]
 pub struct Database {
@@ -92,21 +93,21 @@ impl Database {
         max_attempts: u32,
         backoff_secs: u64,
         error: &str,
-    ) -> Result<bool> {
+    ) -> Result<Option<i64>> {
         let row: Option<(i64,)> = sqlx::query_as("SELECT attempts FROM queue WHERE url = ?")
             .bind(url)
             .fetch_optional(&self.pool)
             .await?;
 
         let Some((attempts,)) = row else {
-            return Ok(false);
+            return Ok(None);
         };
 
         let next_attempt = attempts + 1;
         if next_attempt as u32 > max_attempts {
             warn!(%url, attempts = next_attempt, "Retry limit reached; marking as failed");
             self.mark_failed(url, Some(error)).await?;
-            return Ok(false);
+            return Ok(None);
         }
 
         let exponent = if next_attempt > 0 {
@@ -130,7 +131,7 @@ impl Database {
         .await?;
 
         info!(%url, attempts = next_attempt, delay_secs = delay, "Retry scheduled");
-        Ok(true)
+        Ok(Some(next_attempt))
     }
 
     pub async fn mark_failed(&self, url: &str, error: Option<&str>) -> Result<()> {
@@ -281,6 +282,80 @@ impl Database {
         .await?;
         Ok(())
     }
+
+    pub async fn log_event(&self, event: &CrawlEvent) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO crawl_events (event_type, url, host, message, duration_ms, attempts, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(event_type_label(&event.kind))
+        .bind(&event.url)
+        .bind(&event.host)
+        .bind(&event.message)
+        .bind(event.duration_ms.map(|v| v as i64))
+        .bind(event.attempts)
+        .bind(event.timestamp)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn recent_events(&self, limit: i64) -> Result<Vec<EventLog>> {
+        let rows = sqlx::query_as::<_, EventLog>(
+            "SELECT id, event_type, url, host, message, duration_ms, attempts, created_at
+             FROM crawl_events ORDER BY created_at DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn queue_items(
+        &self,
+        status: Option<&str>,
+        host: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<QueueItem>> {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT url, status, priority, attempts, last_error, host, next_run_at, created_at FROM queue",
+        );
+        let mut clauses = Vec::new();
+        if let Some(status) = status {
+            clauses.push(("status = ", status.to_string()));
+        }
+        if let Some(host) = host {
+            clauses.push(("host = ", host.to_string()));
+        }
+        if !clauses.is_empty() {
+            builder.push(" WHERE ");
+            for (idx, (sql, value)) in clauses.iter().enumerate() {
+                if idx > 0 {
+                    builder.push(" AND ");
+                }
+                builder.push(*sql);
+                builder.push_bind(value);
+            }
+        }
+        builder.push(" ORDER BY rowid LIMIT ");
+        builder.push_bind(limit);
+        builder.push(" OFFSET ");
+        builder.push_bind(offset);
+        let query = builder.build_query_as::<QueueItem>();
+        let rows = query.fetch_all(&self.pool).await?;
+        Ok(rows)
+    }
+
+    pub async fn page_detail(&self, url: &str) -> Result<Option<PageSummary>> {
+        let row = sqlx::query_as::<_, PageSummary>(
+            "SELECT url, title, description, headings, content, summary, lang, crawled_at FROM pages WHERE url = ?",
+        )
+        .bind(url)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
 }
 
 impl Database {
@@ -399,5 +474,18 @@ impl Database {
         .await?;
 
         Ok(results)
+    }
+
+    pub(crate) fn pool(&self) -> &Pool<Sqlite> {
+        &self.pool
+    }
+}
+
+fn event_type_label(kind: &CrawlEventKind) -> &'static str {
+    match kind {
+        CrawlEventKind::Started => "started",
+        CrawlEventKind::Succeeded => "succeeded",
+        CrawlEventKind::Failed => "failed",
+        CrawlEventKind::Retrying => "retrying",
     }
 }

@@ -11,6 +11,9 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.11", features = ["rustls-tls", "gzip", "brotli", "deflate", "stream"] }
 futures-util = "0.3"
 bytes = "1.5"
+tokio-stream = { version = "0.1", features = ["sync"] }
+axum = { version = "0.7", features = ["macros", "json", "tokio"] }
+tower-http = { version = "0.5", features = ["cors" ] }
 
 # Parsing HTML
 scraper = "0.18"
@@ -22,7 +25,7 @@ url = "2.5"
 
 # Banco de Dados
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
-chrono = "0.4" # Para timestamps
+chrono = { version = "0.4", features = ["serde"] } # Para timestamps
 
 # Tratamento de erros
 anyhow = "1.0"
