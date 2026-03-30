@@ -8,7 +8,7 @@ use sqlx::{Executor, Pool, Row, Sqlite, Transaction};
 use tracing::{debug, info, warn};
 use url::Url;
 
-use crate::models::PageRecord;
+use crate::models::{PageRecord, SearchResult};
 
 pub struct Database {
     pool: Pool<Sqlite>,
@@ -194,6 +194,35 @@ impl Database {
         .bind(&record.language)
         .execute(&mut **tx)
         .await?;
+        self.upsert_search_document(tx, record, headings_text)
+            .await?;
+        Ok(())
+    }
+
+    async fn upsert_search_document(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        record: &PageRecord,
+        headings_text: Option<String>,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM pages_fts WHERE url = ?")
+            .bind(&record.url)
+            .execute(&mut **tx)
+            .await?;
+
+        sqlx::query(
+            "INSERT INTO pages_fts (url, title, description, headings, content, summary, lang)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&record.url)
+        .bind(&record.title)
+        .bind(&record.description)
+        .bind(&headings_text)
+        .bind(&record.content)
+        .bind(&record.summary)
+        .bind(&record.language)
+        .execute(&mut **tx)
+        .await?;
         Ok(())
     }
 
@@ -304,6 +333,20 @@ impl Database {
         Self::ensure_column(pool, "pages", "summary", "TEXT").await?;
         Self::ensure_column(pool, "pages", "lang", "TEXT").await?;
 
+        sqlx::query(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+                url UNINDEXED,
+                title,
+                description,
+                headings,
+                content,
+                summary,
+                lang
+            )",
+        )
+        .execute(pool)
+        .await?;
+
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_queue_status_priority ON queue (status, priority DESC, next_run_at)")
             .execute(pool)
             .await?;
@@ -336,5 +379,24 @@ impl Database {
                 .map(|n| n == column)
                 .unwrap_or(false)
         }))
+    }
+}
+
+impl Database {
+    pub async fn search(&self, query: &str, limit: u32) -> Result<Vec<SearchResult>> {
+        let limit = limit.clamp(1, 100) as i64;
+        let results = sqlx::query_as::<_, SearchResult>(
+            "SELECT url, title, snippet(pages_fts, -1, '[', ']') AS snippet, lang, bm25(pages_fts) AS score
+             FROM pages_fts
+             WHERE pages_fts MATCH ?
+             ORDER BY score
+             LIMIT ?",
+        )
+        .bind(query)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(results)
     }
 }

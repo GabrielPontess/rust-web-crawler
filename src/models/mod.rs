@@ -1,3 +1,5 @@
+use sqlx::FromRow;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageRecord {
     pub url: String,
@@ -8,6 +10,15 @@ pub struct PageRecord {
     pub summary: Option<String>,
     pub language: Option<String>,
     pub links: Vec<String>,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct SearchResult {
+    pub url: String,
+    pub title: Option<String>,
+    pub snippet: Option<String>,
+    pub lang: Option<String>,
+    pub score: f64,
 }
 
 impl PageRecord {

@@ -11,4 +11,12 @@ pub struct CliArgs {
         default_value = "appsettings.json"
     )]
     pub config_path: String,
+
+    /// Consulta a ser executada no índice em vez de rastrear
+    #[arg(long = "search", env = "CRAWLER_SEARCH_QUERY")]
+    pub search: Option<String>,
+
+    /// Número máximo de resultados retornados no modo pesquisa
+    #[arg(long = "search-limit", default_value_t = 10, requires = "search")]
+    pub search_limit: u32,
 }

@@ -1,6 +1,6 @@
 /target
 /crawler.db*
 /*.sqlite*
-/appsettings.local.json
+/appsettings.json
 /.env
 /.env.*

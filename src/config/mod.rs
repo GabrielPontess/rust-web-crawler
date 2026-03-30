@@ -5,10 +5,11 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
 use serde::Deserialize;
 use tracing::info;
 use url::Url;
+
+pub use cli::CliArgs;
 
 const DEFAULT_DATABASE_URL: &str = "sqlite:crawler.db";
 const DEFAULT_SEED: &str = "https://www.rust-lang.org/";
@@ -41,9 +42,8 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn from_cli() -> Result<Self> {
-        let args = cli::CliArgs::parse();
-        Self::from_file_path(args.config_path)
+    pub fn from_args(args: &CliArgs) -> Result<Self> {
+        Self::from_file_path(&args.config_path)
     }
 
     pub fn from_file_path<P: AsRef<Path>>(path: P) -> Result<Self> {
