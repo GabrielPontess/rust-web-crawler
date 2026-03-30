@@ -1,0 +1,11 @@
+node_modules
+.next
+out
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+.env
+.env.local
+.env.development
+.env.production
+.eslintcache

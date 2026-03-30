@@ -20,6 +20,7 @@ use tokio::net::TcpListener;
 use tokio_stream;
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::CorsLayer;
+use url::form_urlencoded;
 
 use crate::config::AppConfig;
 use crate::db::Database;
@@ -67,11 +68,23 @@ async fn auth_guard(
     next: Next,
 ) -> Result<Response, StatusCode> {
     if let Some(expected) = &state.config.api_token {
-        let provided = req
+        let provided_header = req
             .headers()
             .get("x-api-key")
             .and_then(|value: &HeaderValue| value.to_str().ok());
-        if provided.map(|p| p == expected).unwrap_or(false) {
+
+        let provided_query = req.uri().query().and_then(|query| {
+            for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+                if key == "token" {
+                    return Some(value.into_owned());
+                }
+            }
+            None
+        });
+
+        if provided_header.map(|p| p == expected).unwrap_or(false)
+            || provided_query.as_deref() == Some(expected)
+        {
             return Ok(next.run(req).await);
         } else {
             return Err(StatusCode::UNAUTHORIZED);

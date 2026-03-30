@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-gray-50 text-slate-900 min-h-screen;
+}
+
+a {
+  @apply text-brand-600 hover:underline;
+}

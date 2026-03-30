@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{Duration as ChronoDuration, Utc};
+use sqlx::Error as SqlxError;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Executor, Pool, Row, Sqlite, Transaction};
 use tracing::{debug, info, warn};
@@ -17,7 +18,7 @@ pub struct Database {
 }
 
 impl Database {
-    pub async fn connect(database_url: &str) -> Result<Self> {
+    pub async fn connect(database_url: &str, max_connections: u32) -> Result<Self> {
         let options = SqliteConnectOptions::from_str(database_url)?
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
@@ -26,14 +27,12 @@ impl Database {
         info!(%database_url, "Connecting to SQLite database");
 
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(max_connections)
             .acquire_timeout(Duration::from_secs(3))
             .connect_with(options)
             .await?;
 
-        info!("Running database migrations");
-        sqlx::migrate!("./migrations").run(&pool).await?;
-        info!("Migrations applied");
+        info!("Ensuring schema (no migrations directory required)");
         Self::ensure_schema(&pool).await?;
 
         info!("Database ready");
@@ -284,7 +283,7 @@ impl Database {
     }
 
     pub async fn log_event(&self, event: &CrawlEvent) -> Result<()> {
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO crawl_events (event_type, url, host, message, duration_ms, attempts, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
@@ -296,19 +295,44 @@ impl Database {
         .bind(event.attempts)
         .bind(event.timestamp)
         .execute(&self.pool)
-        .await?;
-        Ok(())
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if missing_table(&err, "crawl_events") => Ok(()),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub async fn recent_events(&self, limit: i64) -> Result<Vec<EventLog>> {
-        let rows = sqlx::query_as::<_, EventLog>(
+        match sqlx::query_as::<_, EventLog>(
             "SELECT id, event_type, url, host, message, duration_ms, attempts, created_at
              FROM crawl_events ORDER BY created_at DESC LIMIT ?",
         )
         .bind(limit)
         .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
+        .await
+        {
+            Ok(rows) => Ok(rows),
+            Err(err) if missing_table(&err, "crawl_events") => Ok(Vec::new()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub async fn events_after(&self, last_id: i64, limit: i64) -> Result<Vec<EventLog>> {
+        match sqlx::query_as::<_, EventLog>(
+            "SELECT id, event_type, url, host, message, duration_ms, attempts, created_at
+             FROM crawl_events WHERE id > ? ORDER BY id LIMIT ?",
+        )
+        .bind(last_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        {
+            Ok(rows) => Ok(rows),
+            Err(err) if missing_table(&err, "crawl_events") => Ok(Vec::new()),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub async fn queue_items(
@@ -488,4 +512,8 @@ fn event_type_label(kind: &CrawlEventKind) -> &'static str {
         CrawlEventKind::Failed => "failed",
         CrawlEventKind::Retrying => "retrying",
     }
+}
+
+fn missing_table(err: &SqlxError, table: &str) -> bool {
+    matches!(err, SqlxError::Database(db_err) if db_err.message().contains(&format!("no such table: {table}")))
 }

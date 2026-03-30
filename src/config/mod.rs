@@ -23,6 +23,7 @@ const DEFAULT_MAX_RESPONSE_BYTES: usize = 2_000_000;
 const DEFAULT_CONTENT_TYPES: [&str; 2] = ["text/html", "application/xhtml+xml"];
 const DEFAULT_MAX_CONCURRENCY: usize = 4;
 const DEFAULT_HOST_PARALLELISM: usize = 1;
+const DEFAULT_DB_MAX_CONNECTIONS: u32 = 10;
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -40,6 +41,7 @@ pub struct AppConfig {
     pub max_concurrency: usize,
     pub max_host_parallelism: usize,
     pub api_token: Option<String>,
+    pub database_max_connections: u32,
 }
 
 impl AppConfig {
@@ -99,6 +101,7 @@ impl AppConfig {
             max_concurrency: DEFAULT_MAX_CONCURRENCY,
             max_host_parallelism: DEFAULT_HOST_PARALLELISM,
             api_token: None,
+            database_max_connections: DEFAULT_DB_MAX_CONNECTIONS,
         }
     }
 }
@@ -167,6 +170,11 @@ impl TryFrom<FileConfig> for AppConfig {
             .unwrap_or(DEFAULT_HOST_PARALLELISM)
             .max(1);
 
+        let database_max_connections = raw
+            .database_max_connections
+            .unwrap_or(DEFAULT_DB_MAX_CONNECTIONS)
+            .max(1);
+
         Ok(Self {
             database_url,
             seed_urls,
@@ -182,6 +190,7 @@ impl TryFrom<FileConfig> for AppConfig {
             max_concurrency,
             max_host_parallelism,
             api_token: raw.api_token,
+            database_max_connections,
         })
     }
 }
@@ -252,6 +261,13 @@ mod tests {
         let cfg = from_json("{}").unwrap();
         assert_eq!(cfg.max_concurrency, DEFAULT_MAX_CONCURRENCY);
         assert_eq!(cfg.max_host_parallelism, DEFAULT_HOST_PARALLELISM);
+        assert_eq!(cfg.database_max_connections, DEFAULT_DB_MAX_CONNECTIONS);
+    }
+
+    #[test]
+    fn custom_database_connections() {
+        let cfg = from_json(r#"{"database_max_connections":25}"#).unwrap();
+        assert_eq!(cfg.database_max_connections, 25);
     }
 }
 
@@ -285,4 +301,6 @@ struct FileConfig {
     max_host_parallelism: Option<usize>,
     #[serde(default)]
     api_token: Option<String>,
+    #[serde(default)]
+    database_max_connections: Option<u32>,
 }
