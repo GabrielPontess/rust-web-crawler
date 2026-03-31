@@ -54,8 +54,8 @@ pub async fn run_server(
         .route("/api/page", get(page_detail))
         .route("/stream/events", get(stream_events))
         .with_state(state.clone())
-        .layer(CorsLayer::permissive())
-        .layer(from_fn_with_state(state.clone(), auth_guard));
+        .layer(from_fn_with_state(state.clone(), auth_guard))
+        .layer(CorsLayer::permissive());
 
     let listener = TcpListener::bind(addr).await?;
     axum::serve(listener, router).await?;

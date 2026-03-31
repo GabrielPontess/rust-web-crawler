@@ -1,9 +1,9 @@
 {
-  "database_url": "postgres://crawler:crawler@localhost:5432/crawler",
-  "seeds": [
+  "database_url": "postgres://crawler:crawler@postgres:5432/crawler",
+  "seed_urls": [
     "https://www.rust-lang.org/"
   ],
-  "user_agent": "RustyCrawlerMVP/0.1",
+  "user_agent": "CrawlerDocker/0.1",
   "request_timeout_secs": 10,
   "politeness_delay_secs": 1,
   "default_priority": 0,
@@ -15,8 +15,8 @@
     "text/html",
     "application/xhtml+xml"
   ],
-  "max_concurrency": 4,
-  "max_host_parallelism": 1,
+  "max_concurrency": 8,
+  "max_host_parallelism": 2,
   "database_max_connections": 6,
   "api_token": null
 }

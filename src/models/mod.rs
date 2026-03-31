@@ -27,8 +27,8 @@ pub struct SearchResult {
 pub struct QueueItem {
     pub url: String,
     pub status: String,
-    pub priority: i64,
-    pub attempts: i64,
+    pub priority: i32,
+    pub attempts: i32,
     pub last_error: Option<String>,
     pub host: Option<String>,
     pub next_run_at: Option<DateTime<Utc>>,

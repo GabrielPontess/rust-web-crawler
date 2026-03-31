@@ -8,9 +8,12 @@ import type {
 } from "./types";
 
 async function apiFetch<T>(path: string, fallback?: T): Promise<T> {
-  const url = `${API_BASE_URL}${path}`;
+  const url = new URL(path, API_BASE_URL);
+  if (API_TOKEN) {
+    url.searchParams.set("token", API_TOKEN);
+  }
   try {
-    const res = await fetch(url, {
+    const res = await fetch(url.toString(), {
       headers: API_TOKEN ? { "x-api-key": API_TOKEN } : undefined,
       cache: "no-store",
     });
